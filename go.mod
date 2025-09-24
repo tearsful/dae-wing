@@ -6,7 +6,6 @@ toolchain go1.23.6
 
 require (
 	github.com/daeuniverse/dae v0.2.0
-	github.com/daeuniverse/outbound v0.0.0-20250501130119-88bbdbc0a58d
 	github.com/glebarez/sqlite v1.8.0
 	github.com/golang-jwt/jwt/v5 v5.0.0
 	github.com/graph-gophers/graphql-go v1.5.1-0.20230228210639-f05ace9f4a41
@@ -18,6 +17,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.1
 	github.com/stoewer/go-strcase v1.3.0
+	github.com/tearsful/outbound v0.2.0
 	github.com/tidwall/gjson v1.14.4
 	github.com/tidwall/sjson v1.2.5
 	github.com/vearutop/statigz v1.3.0

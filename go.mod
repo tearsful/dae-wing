@@ -14,7 +14,7 @@ require (
 	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/cobra v1.10.2
 	github.com/stoewer/go-strcase v1.3.0
-	github.com/tearsful/outbound v0.3.20
+	github.com/tearsful/outbound v0.3.22
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/vearutop/statigz v1.3.0

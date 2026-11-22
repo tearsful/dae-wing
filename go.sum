@@ -309,8 +309,8 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/tearsful/outbound v0.3.20 h1:AEE/WVWjcLDxpfkP7K5aTcibGGcirlSrUAr9+TCC1Lo=
-github.com/tearsful/outbound v0.3.20/go.mod h1:kb/t6Oj9P6V77GhtXVyXWkxAdMoaX02ZTSDiT+uI3Ac=
+github.com/tearsful/outbound v0.3.22 h1:2wPXviwbLRUUyKpiw682GL8fs0M0LqDUNGuRie0Jpk0=
+github.com/tearsful/outbound v0.3.22/go.mod h1:kb/t6Oj9P6V77GhtXVyXWkxAdMoaX02ZTSDiT+uI3Ac=
 github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
 github.com/tidwall/gjson v1.18.0 h1:FIDeeyB800efLX89e5a8Y0BNH+LOngJyGrIWxG2FKQY=
 github.com/tidwall/gjson v1.18.0/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=

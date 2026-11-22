@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/daeuniverse/dae-wing/db"
+	"github.com/daeuniverse/dae-wing/geoupdate"
 	"github.com/daeuniverse/dae-wing/graphql/internal"
 	"github.com/daeuniverse/dae-wing/graphql/service/config"
 	"github.com/daeuniverse/dae-wing/graphql/service/config/global"
@@ -512,4 +513,29 @@ func (r *MutationResolver) GroupDelNodes(args *struct {
 	NodeIDs []graphql.ID
 }) (int32, error) {
 	return group.DelNodes(context.TODO(), args.ID, args.NodeIDs)
+}
+
+func (r *MutationResolver) SetGeoUpdateSchedule(args *struct {
+	Cron string
+}) (int32, error) {
+	if err := geoupdate.SetCron(args.Cron); err != nil {
+		return 0, err
+	}
+	if err := geoupdate.Reschedule(); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+func (r *MutationResolver) UpdateGeofile(args *struct {
+	FileName *string
+}) (int32, error) {
+	name := ""
+	if args.FileName != nil {
+		name = *args.FileName
+	}
+	if err := geoupdate.UpdateGeofile(name); err != nil {
+		return 0, err
+	}
+	return 1, nil
 }

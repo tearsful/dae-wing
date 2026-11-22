@@ -41,6 +41,8 @@ type Query {
 	group(name: String!): Group! @hasRole(role: ADMIN)
 	nodes(id: ID, subscriptionId: ID, first: Int, after: ID): NodesConnection! @hasRole(role: ADMIN)
 	general: General! @hasRole(role: ADMIN)
+	# geoUpdateSchedule returns the cron used for built-in geosite/geoip auto-updates.
+	geoUpdateSchedule: GeoUpdateSchedule! @hasRole(role: ADMIN)
 }
 type Mutation {
 	# createUser creates a user if there is no user.
@@ -143,6 +145,15 @@ type Mutation {
 
 	# removeGroup is to remove a group.
 	removeGroup(id: ID!): Int! @hasRole(role: ADMIN)
+
+	# setGeoUpdateSchedule saves geoUpdateCron (empty disables) and reschedules immediately.
+	setGeoUpdateSchedule(cron: String!): Int! @hasRole(role: ADMIN)
+	# updateGeofile downloads geosite.dat / geoip.dat (or one file) and reloads dae if running.
+	updateGeofile(fileName: String): Int! @hasRole(role: ADMIN)
+}
+type GeoUpdateSchedule {
+	cron: String!
+	defaultCron: String!
 }
 enum Role {
 	ADMIN

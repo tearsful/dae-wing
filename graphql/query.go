@@ -18,6 +18,7 @@ import (
 	"github.com/daeuniverse/dae-wing/db"
 	"github.com/daeuniverse/dae-wing/graphql/service/config"
 	"github.com/daeuniverse/dae-wing/graphql/service/dns"
+	"github.com/daeuniverse/dae-wing/geoupdate"
 	"github.com/daeuniverse/dae-wing/graphql/service/general"
 	"github.com/daeuniverse/dae-wing/graphql/service/group"
 	"github.com/daeuniverse/dae-wing/graphql/service/node"
@@ -145,6 +146,22 @@ func (r *queryResolver) General() (*general.Resolver, error) {
 	}
 	return &general.Resolver{
 		GraphqlSchema: schema,
+	}, nil
+}
+
+type GeoUpdateScheduleResolver struct {
+	Cron        string
+	DefaultCron string
+}
+
+func (r *queryResolver) GeoUpdateSchedule() (*GeoUpdateScheduleResolver, error) {
+	expr, err := geoupdate.GetCron()
+	if err != nil {
+		return nil, err
+	}
+	return &GeoUpdateScheduleResolver{
+		Cron:        expr,
+		DefaultCron: geoupdate.DefaultCron,
 	}, nil
 }
 func (r *queryResolver) Configs(args *struct {

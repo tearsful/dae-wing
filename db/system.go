@@ -13,6 +13,9 @@ type System struct {
 	RunningRoutingVersion  uint   `gorm:"not null;default:0"`
 	RunningGroupVersionSum uint   `gorm:"not null;default:0"`
 	RunningGroupIds        string `gorm:"not null;default:''"`
+	// GeoUpdateCron is a seconds-enabled cron expression for geosite/geoip refresh.
+	// Empty string disables the job. Default: Thursday 10:00.
+	GeoUpdateCron string `gorm:"not null;default:'0 0 10 * * 4'"`
 
 	// Foreign keys.
 	RunningConfigID  *uint

@@ -17,6 +17,7 @@ import (
 	"github.com/daeuniverse/dae-wing/common"
 	"github.com/daeuniverse/dae-wing/dae"
 	"github.com/daeuniverse/dae-wing/db"
+	"github.com/daeuniverse/dae-wing/geoupdate"
 	"github.com/daeuniverse/dae-wing/graphql"
 	"github.com/daeuniverse/dae-wing/graphql/service/config"
 	"github.com/daeuniverse/dae-wing/webrender"
@@ -110,6 +111,9 @@ var (
 			if err := restoreRunningState(); err != nil {
 				logrus.Warnln("Failed to restore last running state:", err)
 			}
+
+			// Schedule geosite/geoip auto-update (panel-configurable).
+			geoupdate.Start()
 
 			// ListenAndServe GraphQL.
 			schema, err := graphql.Schema()

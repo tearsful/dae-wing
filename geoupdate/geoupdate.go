@@ -26,8 +26,11 @@ import (
 // Empty cron disables the job. Users can turn it off or change frequency in the panel.
 const DefaultCron = "0 0 10 * * 4"
 
-// DefaultGeoDir matches docker/glider (ENV DAE_LOCATION_ASSET=/usr/local/share/daed).
+// DefaultGeoDir is the hard-coded TARGET_DIR in docker/glider/update_geo.sh.
 const DefaultGeoDir = "/usr/local/share/daed"
+
+// DefaultTmpDir is the hard-coded TMP_DIR in docker/glider/update_geo.sh.
+const DefaultTmpDir = "/tmp/geo_update"
 
 var cronParser = cron.NewParser(
 	cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
@@ -38,21 +41,19 @@ type geofileEntry struct {
 	URLs     []string
 }
 
-// defaultAllowlist mirrors docker/glider/update_geo.sh sources used by this project.
+// defaultAllowlist follows docker/glider/update_geo.sh (+ custom.dat shipped in the image).
 func defaultAllowlist() map[string]geofileEntry {
 	return map[string]geofileEntry{
 		"geoip.dat": {
 			FileName: "geoip.dat",
 			URLs: []string{
 				"https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat",
-				"https://cdn.jsdelivr.net/gh/DustinWin/ruleset_geodata@mihomo-geodata/geoip-all.dat",
 			},
 		},
 		"geosite.dat": {
 			FileName: "geosite.dat",
 			URLs: []string{
 				"https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat",
-				"https://cdn.jsdelivr.net/gh/DustinWin/ruleset_geodata@mihomo-geodata/geosite-all.dat",
 			},
 		},
 		"custom.dat": {
@@ -64,9 +65,9 @@ func defaultAllowlist() map[string]geofileEntry {
 	}
 }
 
-// GeoDir returns the directory that daed actually loads GEO assets from.
-// Prefer DAE_LOCATION_ASSET (set in docker/glider Dockerfile); otherwise the
-// project default /usr/local/share/daed — do NOT fall back to /usr/share/dae.
+// GeoDir returns the install directory used by this project.
+// Must match docker/glider/update_geo.sh TARGET_DIR=/usr/local/share/daed.
+// DAE_LOCATION_ASSET may override only when explicitly set (Dockerfile sets the same path).
 func GeoDir() string {
 	if v := strings.TrimSpace(os.Getenv("DAE_LOCATION_ASSET")); v != "" {
 		return filepath.Clean(v)
@@ -105,8 +106,8 @@ func SetCron(expr string) error {
 	return db.DB(context.TODO()).Model(&sys).Update("geo_update_cron", expr).Error
 }
 
-// UpdateGeofile downloads GEO files into a /tmp workdir, verifies them, then
-// installs into GeoDir() and reloads daed when it is running.
+// UpdateGeofile mirrors docker/glider/update_geo.sh:
+// download into /tmp/geo_update → verify → backup → mv into /usr/local/share/daed → reload.
 func UpdateGeofile(fileName string) error {
 	allow := defaultAllowlist()
 	if fileName != "" {
@@ -116,48 +117,48 @@ func UpdateGeofile(fileName string) error {
 	}
 
 	destDir := GeoDir()
+	tmpDir := DefaultTmpDir
+
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("create geo dir %s: %w", destDir, err)
 	}
-
-	tmpRoot, err := os.MkdirTemp(os.TempDir(), "daed-geoupdate-*")
-	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return fmt.Errorf("create temp dir %s: %w", tmpDir, err)
 	}
 	defer func() {
-		if rmErr := os.RemoveAll(tmpRoot); rmErr != nil {
-			logrus.Warnf("cleanup temp geo dir %s: %v", tmpRoot, rmErr)
-		}
+		_ = os.RemoveAll(tmpDir)
 	}()
+
+	// Clean stale temps (same as update_geo.sh).
+	for _, name := range []string{"geoip.dat", "geosite.dat", "custom.dat"} {
+		_ = os.Remove(filepath.Join(tmpDir, name))
+	}
 
 	keys := []string{"geosite.dat", "geoip.dat", "custom.dat"}
 	if fileName != "" {
 		keys = []string{fileName}
 	}
 
-	logrus.Infof("Geofile update: download → %s, install → %s", tmpRoot, destDir)
+	logrus.Infof("Geofile update: TMP=%s TARGET=%s", tmpDir, destDir)
 
 	type staged struct {
 		name    string
 		tmpPath string
 		dest    string
 	}
-	stagedFiles := make([]staged, 0, len(keys))
+	var files []staged
 
 	for _, key := range keys {
 		entry := allow[key]
-		tmpPath := filepath.Join(tmpRoot, entry.FileName)
+		tmpPath := filepath.Join(tmpDir, entry.FileName)
 		if err := downloadToFile(entry.URLs, tmpPath); err != nil {
 			return fmt.Errorf("download %s: %w", entry.FileName, err)
 		}
 		fi, err := os.Stat(tmpPath)
-		if err != nil {
-			return fmt.Errorf("stat downloaded %s: %w", entry.FileName, err)
+		if err != nil || fi.Size() <= 0 {
+			return fmt.Errorf("downloaded %s missing or empty", entry.FileName)
 		}
-		if fi.Size() <= 0 {
-			return fmt.Errorf("downloaded %s is empty", entry.FileName)
-		}
-		stagedFiles = append(stagedFiles, staged{
+		files = append(files, staged{
 			name:    entry.FileName,
 			tmpPath: tmpPath,
 			dest:    filepath.Join(destDir, entry.FileName),
@@ -165,12 +166,29 @@ func UpdateGeofile(fileName string) error {
 		logrus.Infof("Geofile downloaded OK: %s (%d bytes)", entry.FileName, fi.Size())
 	}
 
-	// Only after every download succeeds, install into the live asset directory.
-	for _, f := range stagedFiles {
-		if err := installFile(f.tmpPath, f.dest); err != nil {
-			return fmt.Errorf("install %s → %s: %w", f.name, f.dest, err)
+	// Backup existing live files, then mv from /tmp into TARGET_DIR.
+	for _, f := range files {
+		if _, err := os.Stat(f.dest); err == nil {
+			bak := filepath.Join(os.TempDir(), fmt.Sprintf("%s.backup.%s", f.name, time.Now().Format("20060102_150405")))
+			if err := copyFile(f.dest, bak); err != nil {
+				logrus.Warnf("backup %s failed: %v", f.dest, err)
+			} else {
+				logrus.Infof("backed up %s → %s", f.dest, bak)
+			}
 		}
-		logrus.Infof("Geofile installed: %s", f.dest)
+		if err := os.Rename(f.tmpPath, f.dest); err != nil {
+			// Cross-device: copy then remove temp.
+			if err2 := copyFile(f.tmpPath, f.dest); err2 != nil {
+				return fmt.Errorf("install %s → %s: rename=%v copy=%v", f.name, f.dest, err, err2)
+			}
+			_ = os.Remove(f.tmpPath)
+		}
+		_ = os.Chmod(f.dest, 0644)
+		fi, err := os.Stat(f.dest)
+		if err != nil || fi.Size() <= 0 {
+			return fmt.Errorf("installed %s missing or empty", f.dest)
+		}
+		logrus.Infof("Geofile installed: %s (%d bytes)", f.dest, fi.Size())
 	}
 
 	return reloadService()
@@ -198,7 +216,6 @@ func downloadToFile(urls []string, tmpPath string) error {
 			logrus.Warn(lastErr)
 			continue
 		}
-
 		f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 		if err != nil {
 			resp.Body.Close()
@@ -207,19 +224,15 @@ func downloadToFile(urls []string, tmpPath string) error {
 		n, copyErr := io.Copy(f, resp.Body)
 		closeErr := f.Close()
 		resp.Body.Close()
-		if copyErr != nil {
+		if copyErr != nil || closeErr != nil || n <= 0 {
 			os.Remove(tmpPath)
-			lastErr = fmt.Errorf("%s: copy: %w", url, copyErr)
-			continue
-		}
-		if closeErr != nil {
-			os.Remove(tmpPath)
-			lastErr = fmt.Errorf("%s: close: %w", url, closeErr)
-			continue
-		}
-		if n <= 0 {
-			os.Remove(tmpPath)
-			lastErr = fmt.Errorf("%s: empty body", url)
+			if copyErr != nil {
+				lastErr = copyErr
+			} else if closeErr != nil {
+				lastErr = closeErr
+			} else {
+				lastErr = fmt.Errorf("%s: empty body", url)
+			}
 			continue
 		}
 		return nil
@@ -228,57 +241,6 @@ func downloadToFile(urls []string, tmpPath string) error {
 		return lastErr
 	}
 	return fmt.Errorf("no URL succeeded for %s", filepath.Base(tmpPath))
-}
-
-// installFile copies a completed temp file into destDir (same-FS rename preferred,
-// cross-device falls back to copy then remove the temp source is handled by caller cleanup).
-func installFile(tmpPath, destPath string) error {
-	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-		return err
-	}
-
-	// Stage beside the destination so rename is atomic on the same filesystem.
-	staging, err := os.CreateTemp(filepath.Dir(destPath), filepath.Base(destPath)+".install.*")
-	if err != nil {
-		return err
-	}
-	stagingPath := staging.Name()
-
-	src, err := os.Open(tmpPath)
-	if err != nil {
-		staging.Close()
-		os.Remove(stagingPath)
-		return err
-	}
-	_, copyErr := io.Copy(staging, src)
-	src.Close()
-	closeErr := staging.Close()
-	if copyErr != nil || closeErr != nil {
-		os.Remove(stagingPath)
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	}
-
-	if err := os.Rename(stagingPath, destPath); err != nil {
-		// Cross-device rename can fail; fall back to copy into dest then remove staging.
-		if copyErr := copyFile(stagingPath, destPath); copyErr != nil {
-			os.Remove(stagingPath)
-			return err
-		}
-		os.Remove(stagingPath)
-	}
-	_ = os.Chmod(destPath, 0644)
-
-	fi, err := os.Stat(destPath)
-	if err != nil {
-		return err
-	}
-	if fi.Size() <= 0 {
-		return fmt.Errorf("installed file is empty: %s", destPath)
-	}
-	return nil
 }
 
 func copyFile(src, dst string) error {
@@ -380,6 +342,6 @@ func rescheduleLocked() error {
 		return err
 	}
 	entry = id
-	logrus.Infof("Geofile scheduled update enabled: %s (assets dir=%s)", expr, GeoDir())
+	logrus.Infof("Geofile scheduled update enabled: %s (TARGET=%s)", expr, GeoDir())
 	return nil
 }

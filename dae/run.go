@@ -6,6 +6,7 @@
 package dae
 
 import (
+	"context"
 	"fmt"
 	"net/netip"
 	"runtime"
@@ -16,9 +17,9 @@ import (
 	"github.com/daeuniverse/dae/control"
 	"github.com/daeuniverse/dae/pkg/config_parser"
 	"github.com/daeuniverse/dae/pkg/logger"
-	"github.com/tearsful/outbound/protocol/direct"
 	"github.com/mohae/deepcopy"
 	"github.com/sirupsen/logrus"
+	"github.com/tearsful/outbound/protocol/direct"
 )
 
 var ErrControlPlaneNotInit = fmt.Errorf("control plane doesn't init yet")
@@ -215,14 +216,19 @@ func newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache map[string]*c
 	// Deep copy to prevent modification.
 	conf = deepcopy.Copy(conf).(*daeConfig.Config)
 
-	// Init Direct Dialers.
-	direct.InitDirectDialers(conf.Global.FallbackResolver)
-	netutils.FallbackDns = netip.MustParseAddrPort(conf.Global.FallbackResolver)
+	// Generation-scoped direct dialers and system resolver. A bad
+	// fallback_resolver is an error, not a panic.
+	fallbackResolver, err := netip.ParseAddrPort(conf.Global.FallbackResolver)
+	if err != nil {
+		return nil, fmt.Errorf("fallback_resolver %q: %w", conf.Global.FallbackResolver, err)
+	}
+	directDialers := direct.NewDirectDialers(conf.Global.FallbackResolver)
+	systemDNSResolver := netutils.NewSystemDNSResolver(fallbackResolver)
 
 	if !conf.Global.DisableWaitingNetwork && len(conf.Global.WanInterface) > 0 {
 		// Wait for network for WAN ready.
 		onceWaitingNetwork.Do(func() {
-			WaitForNetwork(log)
+			WaitForNetwork(log, directDialers.Symmetric)
 		})
 	}
 
@@ -241,8 +247,9 @@ func newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache map[string]*c
 		return nil, err
 	}
 
-	// New dae control plane.
-	c, err = control.NewControlPlane(
+	// New dae control plane (kdae options-based constructor).
+	c, err = control.NewControlPlaneWithContextOptions(
+		context.Background(),
 		log,
 		bpf,
 		dnsCache,
@@ -252,6 +259,11 @@ func newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache map[string]*c
 		&conf.Global,
 		&conf.Dns,
 		externGeoDataDirs,
+		control.ControlPlaneBuildOptions{
+			DirectDialer:         directDialers.Symmetric,
+			FullconeDirectDialer: directDialers.Fullcone,
+			SystemDNSResolver:    systemDNSResolver,
+		},
 	)
 	if err != nil {
 		return nil, err

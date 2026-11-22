@@ -6,6 +6,7 @@
 package db
 
 import (
+	"context"
 	"strings"
 
 	"github.com/daeuniverse/dae-wing/common"
@@ -25,13 +26,14 @@ func NewNodeModel(link string, tag *string, subscriptionId *uint) (*Node, error)
 		}
 		_tag = *tag
 	}
-	d, err := dialer.NewFromLink(&dialer.GlobalOption{
+	d, err := dialer.NewFromLinkContext(context.Background(), &dialer.GlobalOption{
 		Log: logrus.StandardLogger(),
-	}, dialer.InstanceOption{DisableCheck: false}, link, _tag)
+	}, dialer.InstanceOption{DisableCheck: true}, link, _tag)
 	if err != nil {
 		return nil, err
 	}
-	property := d.Property()
+	defer d.Close()
+	property := *d.Property()
 	return &Node{
 		ID:             0,
 		Link:           link,

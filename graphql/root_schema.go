@@ -148,7 +148,8 @@ type Mutation {
 
 	# setGeoUpdateSchedule saves geoUpdateCron (empty disables) and reschedules immediately.
 	setGeoUpdateSchedule(cron: String!): Int! @hasRole(role: ADMIN)
-	# updateGeofile downloads geosite.dat / geoip.dat (or one file) and reloads dae if running.
+	# updateGeofile downloads geosite/geoip/custom into /tmp, installs to DAE_LOCATION_ASSET
+	# (/usr/local/share/daed), then reloads daed when running. Empty fileName updates all.
 	updateGeofile(fileName: String): Int! @hasRole(role: ADMIN)
 }
 type GeoUpdateSchedule {

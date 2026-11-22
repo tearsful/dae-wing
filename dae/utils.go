@@ -18,9 +18,9 @@ import (
 	daeCommon "github.com/daeuniverse/dae/common"
 	daeConfig "github.com/daeuniverse/dae/config"
 	"github.com/daeuniverse/dae/pkg/config_parser"
-	"github.com/mzz2017/softwind/netproxy"
-	"github.com/mzz2017/softwind/protocol/direct"
 	"github.com/sirupsen/logrus"
+	"github.com/tearsful/outbound/netproxy"
+	"github.com/tearsful/outbound/protocol/direct"
 )
 
 var (

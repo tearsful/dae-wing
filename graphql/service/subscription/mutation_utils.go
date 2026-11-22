@@ -148,8 +148,7 @@ func Import(c *gorm.DB, rollbackError bool, argument *internal.ImportArgument) (
 
 func AutoUpdateVersionByIds(d *gorm.DB, ids []uint) (err error) {
 	var sys db.System
-	if err = d.Model(&db.System{}).
-		FirstOrCreate(&sys).Error; err != nil {
+	if err = db.FirstOrCreateSystem(d, &sys).Error; err != nil {
 		return err
 	}
 	if !sys.Running {

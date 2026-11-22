@@ -81,6 +81,9 @@ var (
 				logrus.Fatalln("Failed to init db:", err)
 			}
 
+			// Align geoupdate install dir with dae LocationFinder before dae.Run.
+			geoupdate.EnsureLocationAsset()
+
 			// Run dae.
 			var logOpts *lumberjack.Logger
 			if logFile != "" {
@@ -189,7 +192,7 @@ func restoreRunningState() (err error) {
 
 func shouldReload() (ok bool, err error) {
 	var sys db.System
-	if err := db.DB(context.TODO()).Model(&db.System{}).FirstOrCreate(&sys).Error; err != nil {
+	if err := db.FirstOrCreateSystem(db.DB(context.TODO()), &sys).Error; err != nil {
 		return false, err
 	}
 	if !sys.Running {

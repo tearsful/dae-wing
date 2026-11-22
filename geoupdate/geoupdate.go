@@ -23,14 +23,20 @@ import (
 )
 
 // DefaultCron is Thursday 10:00:00 local time (seconds-enabled cron).
-// Empty cron disables the job. Users can turn it off or change frequency in the panel.
-const DefaultCron = "0 0 10 * * 4"
+const DefaultCron = db.DefaultGeoUpdateCron
+
+// CronDisabled is the persisted value when the user turns off scheduled GEO updates.
+// API/UI still use empty string for "off"; legacy DB empty is migrated to DefaultCron.
+const CronDisabled = "off"
 
 // DefaultGeoDir is the hard-coded TARGET_DIR in docker/glider/update_geo.sh.
 const DefaultGeoDir = "/usr/local/share/daed"
 
 // DefaultTmpDir is the hard-coded TMP_DIR in docker/glider/update_geo.sh.
 const DefaultTmpDir = "/tmp/geo_update"
+
+// maxGeofileBytes caps a single download to avoid filling the disk on a bad upstream.
+const maxGeofileBytes = 256 << 20 // 256 MiB
 
 var cronParser = cron.NewParser(
 	cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
@@ -65,19 +71,36 @@ func defaultAllowlist() map[string]geofileEntry {
 	}
 }
 
-// GeoDir returns the install directory used by this project.
-// Must match docker/glider/update_geo.sh TARGET_DIR=/usr/local/share/daed.
-// DAE_LOCATION_ASSET may override only when explicitly set (Dockerfile sets the same path).
+// GeoDir returns the install directory and keeps DAE_LOCATION_ASSET normalized
+// so LocationFinder (raw getenv) always matches geoupdate installs.
 func GeoDir() string {
-	if v := strings.TrimSpace(os.Getenv("DAE_LOCATION_ASSET")); v != "" {
-		return filepath.Clean(v)
+	return EnsureLocationAsset()
+}
+
+// EnsureLocationAsset normalizes DAE_LOCATION_ASSET (trim + Clean) and persists it
+// back into the environment. LocationFinder reads the raw env without trimming, so
+// we must Setenv the cleaned value or install/lookup paths can diverge.
+// Call before dae.Run. Empty/unset → DefaultGeoDir.
+func EnsureLocationAsset() string {
+	cur := strings.TrimSpace(os.Getenv("DAE_LOCATION_ASSET"))
+	if cur == "" {
+		cur = DefaultGeoDir
+		logrus.Infof("DAE_LOCATION_ASSET unset; defaulting to %s", cur)
+	} else {
+		cur = filepath.Clean(cur)
 	}
-	return DefaultGeoDir
+	_ = os.Setenv("DAE_LOCATION_ASSET", cur)
+	return cur
+}
+
+func isCronDisabled(expr string) bool {
+	expr = strings.TrimSpace(expr)
+	return expr == "" || strings.EqualFold(expr, CronDisabled)
 }
 
 func ValidateCron(expr string) error {
 	expr = strings.TrimSpace(expr)
-	if expr == "" {
+	if isCronDisabled(expr) {
 		return nil
 	}
 	if _, err := cronParser.Parse(expr); err != nil {
@@ -86,12 +109,17 @@ func ValidateCron(expr string) error {
 	return nil
 }
 
+// GetCron returns the schedule for API/UI. Disabled schedules are returned as "".
 func GetCron() (string, error) {
 	var sys db.System
-	if err := db.DB(context.TODO()).Model(&db.System{}).FirstOrCreate(&sys).Error; err != nil {
+	if err := db.FirstOrCreateSystem(db.DB(context.TODO()), &sys).Error; err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(sys.GeoUpdateCron), nil
+	expr := strings.TrimSpace(sys.GeoUpdateCron)
+	if isCronDisabled(expr) {
+		return "", nil
+	}
+	return expr, nil
 }
 
 func SetCron(expr string) error {
@@ -99,16 +127,41 @@ func SetCron(expr string) error {
 	if err := ValidateCron(expr); err != nil {
 		return err
 	}
+	stored := expr
+	if isCronDisabled(expr) {
+		stored = CronDisabled
+	}
 	var sys db.System
-	if err := db.DB(context.TODO()).Model(&db.System{}).FirstOrCreate(&sys).Error; err != nil {
+	if err := db.FirstOrCreateSystem(db.DB(context.TODO()), &sys).Error; err != nil {
 		return err
 	}
-	return db.DB(context.TODO()).Model(&sys).Update("geo_update_cron", expr).Error
+	return db.DB(context.TODO()).Model(&sys).Update("geo_update_cron", stored).Error
+}
+
+// migrateLegacyEmptyCron upgrades buggy/legacy "" rows to DefaultCron.
+// Intentional disable is stored as CronDisabled ("off"), so it is left alone.
+func migrateLegacyEmptyCron() error {
+	var sys db.System
+	if err := db.FirstOrCreateSystem(db.DB(context.TODO()), &sys).Error; err != nil {
+		return err
+	}
+	if strings.TrimSpace(sys.GeoUpdateCron) != "" {
+		return nil
+	}
+	if err := db.DB(context.TODO()).Model(&sys).Update("geo_update_cron", DefaultCron).Error; err != nil {
+		return err
+	}
+	logrus.Infof("Geofile schedule: migrated legacy empty cron → %s", DefaultCron)
+	return nil
 }
 
 // UpdateGeofile mirrors docker/glider/update_geo.sh:
-// download into /tmp/geo_update → verify → backup → mv into /usr/local/share/daed → reload.
+// download under /tmp/geo_update/<id> → verify → backup → mv into /usr/local/share/daed → reload.
 func UpdateGeofile(fileName string) error {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+
+	fileName = strings.TrimSpace(fileName)
 	allow := defaultAllowlist()
 	if fileName != "" {
 		if _, ok := allow[fileName]; !ok {
@@ -117,22 +170,20 @@ func UpdateGeofile(fileName string) error {
 	}
 
 	destDir := GeoDir()
-	tmpDir := DefaultTmpDir
-
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("create geo dir %s: %w", destDir, err)
 	}
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		return fmt.Errorf("create temp dir %s: %w", tmpDir, err)
+	if err := os.MkdirAll(DefaultTmpDir, 0755); err != nil {
+		return fmt.Errorf("create temp root %s: %w", DefaultTmpDir, err)
+	}
+	// Unique workdir per run so concurrent/manual+cron never share partial downloads.
+	tmpDir, err := os.MkdirTemp(DefaultTmpDir, "run-*")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
 	}
 	defer func() {
 		_ = os.RemoveAll(tmpDir)
 	}()
-
-	// Clean stale temps (same as update_geo.sh).
-	for _, name := range []string{"geoip.dat", "geosite.dat", "custom.dat"} {
-		_ = os.Remove(filepath.Join(tmpDir, name))
-	}
 
 	keys := []string{"geosite.dat", "geoip.dat", "custom.dat"}
 	if fileName != "" {
@@ -167,11 +218,45 @@ func UpdateGeofile(fileName string) error {
 	}
 
 	// Backup existing live files, then mv from /tmp into TARGET_DIR.
+	// On mid-batch failure, restore previously installed files from their backups.
+	type installed struct {
+		dest string
+		bak  string
+	}
+	var done []installed
+
+	rollback := func() {
+		for i := len(done) - 1; i >= 0; i-- {
+			item := done[i]
+			if item.bak == "" {
+				continue
+			}
+			if err := copyFile(item.bak, item.dest); err != nil {
+				logrus.Warnf("rollback %s from %s failed: %v", item.dest, item.bak, err)
+				continue
+			}
+			logrus.Warnf("rolled back %s from backup", item.dest)
+		}
+	}
+
+	restoreOne := func(dest, bak string) {
+		if bak == "" {
+			return
+		}
+		if err := copyFile(bak, dest); err != nil {
+			logrus.Warnf("restore %s from %s failed: %v", dest, bak, err)
+			return
+		}
+		logrus.Warnf("restored %s from backup", dest)
+	}
+
 	for _, f := range files {
+		bak := ""
 		if _, err := os.Stat(f.dest); err == nil {
-			bak := filepath.Join(os.TempDir(), fmt.Sprintf("%s.backup.%s", f.name, time.Now().Format("20060102_150405")))
+			bak = filepath.Join(os.TempDir(), fmt.Sprintf("%s.backup.%s", f.name, time.Now().Format("20060102_150405")))
 			if err := copyFile(f.dest, bak); err != nil {
 				logrus.Warnf("backup %s failed: %v", f.dest, err)
+				bak = ""
 			} else {
 				logrus.Infof("backed up %s → %s", f.dest, bak)
 			}
@@ -179,6 +264,8 @@ func UpdateGeofile(fileName string) error {
 		if err := os.Rename(f.tmpPath, f.dest); err != nil {
 			// Cross-device: copy then remove temp.
 			if err2 := copyFile(f.tmpPath, f.dest); err2 != nil {
+				restoreOne(f.dest, bak)
+				rollback()
 				return fmt.Errorf("install %s → %s: rename=%v copy=%v", f.name, f.dest, err, err2)
 			}
 			_ = os.Remove(f.tmpPath)
@@ -186,11 +273,16 @@ func UpdateGeofile(fileName string) error {
 		_ = os.Chmod(f.dest, 0644)
 		fi, err := os.Stat(f.dest)
 		if err != nil || fi.Size() <= 0 {
+			restoreOne(f.dest, bak)
+			rollback()
 			return fmt.Errorf("installed %s missing or empty", f.dest)
 		}
+		done = append(done, installed{dest: f.dest, bak: bak})
 		logrus.Infof("Geofile installed: %s (%d bytes)", f.dest, fi.Size())
 	}
 
+	// Keep newly installed files even if reload fails: dae may already be using
+	// them, and the next successful reload should see the updated assets.
 	return reloadService()
 }
 
@@ -221,7 +313,8 @@ func downloadToFile(urls []string, tmpPath string) error {
 			resp.Body.Close()
 			return err
 		}
-		n, copyErr := io.Copy(f, resp.Body)
+		// LimitReader stops at max+1 so we can detect oversized bodies.
+		n, copyErr := io.Copy(f, io.LimitReader(resp.Body, maxGeofileBytes+1))
 		closeErr := f.Close()
 		resp.Body.Close()
 		if copyErr != nil || closeErr != nil || n <= 0 {
@@ -233,6 +326,12 @@ func downloadToFile(urls []string, tmpPath string) error {
 			} else {
 				lastErr = fmt.Errorf("%s: empty body", url)
 			}
+			continue
+		}
+		if n > maxGeofileBytes {
+			os.Remove(tmpPath)
+			lastErr = fmt.Errorf("%s: exceeds size limit (%d bytes)", url, maxGeofileBytes)
+			logrus.Warn(lastErr)
 			continue
 		}
 		return nil
@@ -263,7 +362,7 @@ func copyFile(src, dst string) error {
 
 func reloadService() error {
 	var sys db.System
-	if err := db.DB(context.TODO()).Model(&db.System{}).FirstOrCreate(&sys).Error; err != nil {
+	if err := db.FirstOrCreateSystem(db.DB(context.TODO()), &sys).Error; err != nil {
 		return err
 	}
 	if !sys.Running {
@@ -281,14 +380,16 @@ func reloadService() error {
 }
 
 var (
-	mu    sync.Mutex
-	c     *cron.Cron
-	entry cron.EntryID
+	mu       sync.Mutex
+	updateMu sync.Mutex // serialize downloads/installs
+	c        *cron.Cron
+	entry    cron.EntryID
 )
 
 func Start() {
 	mu.Lock()
 	defer mu.Unlock()
+	EnsureLocationAsset()
 	if c == nil {
 		c = cron.New(
 			cron.WithLocation(time.Local),
@@ -297,8 +398,11 @@ func Start() {
 		)
 		c.Start()
 	}
-	// DB default for new System rows is Thursday 10:00 (DefaultCron).
-	// Empty cron means the user disabled scheduled updates — do not re-seed.
+	// Legacy "" (buggy FirstOrCreate / pre-sentinel Off) → DefaultCron.
+	// Explicit Off is persisted as CronDisabled and must not be re-seeded.
+	if err := migrateLegacyEmptyCron(); err != nil {
+		logrus.Warnf("geoupdate migrate cron: %v", err)
+	}
 	if err := rescheduleLocked(); err != nil {
 		logrus.Warnf("geoupdate schedule: %v", err)
 	}
@@ -323,7 +427,7 @@ func rescheduleLocked() error {
 		return err
 	}
 	expr = strings.TrimSpace(expr)
-	if expr == "" {
+	if isCronDisabled(expr) {
 		logrus.Info("Geofile scheduled update disabled")
 		return nil
 	}

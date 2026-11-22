@@ -20,7 +20,8 @@ type DaeResolver struct {
 
 func (r *DaeResolver) Running() (bool, error) {
 	var m db.System
-	q := db.DB(r.Ctx).Select("running").Model(&db.System{}).FirstOrCreate(&m)
+	// Avoid Select()-only create: Attrs(GeoUpdateCron) must be persisted on INSERT.
+	q := db.FirstOrCreateSystem(db.DB(r.Ctx), &m)
 	if q.Error != nil {
 		return false, q.Error
 	}
@@ -31,9 +32,7 @@ func (r *DaeResolver) Modified() (bool, error) {
 	var m db.System
 	tx := db.BeginReadOnlyTx(r.Ctx)
 	defer tx.Commit()
-	q := tx.Model(&m).
-		Preload("RunningGroups").
-		FirstOrCreate(&m)
+	q := db.FirstOrCreateSystem(tx.Preload("RunningGroups"), &m)
 	if q.Error != nil {
 		return false, q.Error
 	}

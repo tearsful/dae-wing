@@ -146,10 +146,11 @@ type Mutation {
 	# removeGroup is to remove a group.
 	removeGroup(id: ID!): Int! @hasRole(role: ADMIN)
 
-	# setGeoUpdateSchedule saves geoUpdateCron (empty disables) and reschedules immediately.
+	# setGeoUpdateSchedule saves geoUpdateCron (empty/"off" disables) and reschedules immediately.
 	setGeoUpdateSchedule(cron: String!): Int! @hasRole(role: ADMIN)
-	# updateGeofile downloads geosite/geoip/custom into /tmp, installs to DAE_LOCATION_ASSET
-	# (/usr/local/share/daed), then reloads daed when running. Empty fileName updates all.
+	# updateGeofile downloads geosite/geoip/custom under /tmp/geo_update/<id>, installs to
+	# DAE_LOCATION_ASSET (/usr/local/share/daed), then reloads daed when running.
+	# Empty fileName updates all; concurrent calls are serialized.
 	updateGeofile(fileName: String): Int! @hasRole(role: ADMIN)
 }
 type GeoUpdateSchedule {

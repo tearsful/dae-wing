@@ -256,7 +256,7 @@ func Run(d *gorm.DB, noLoad bool) (n int32, err error) {
 
 		// Running -> false
 		var sys db.System
-		if err = d.Model(&db.System{}).FirstOrCreate(&sys).Error; err != nil {
+		if err = db.FirstOrCreateSystem(d, &sys).Error; err != nil {
 			return 0, err
 		}
 		if err = d.Model(&sys).Updates(map[string]interface{}{
@@ -436,7 +436,7 @@ func Run(d *gorm.DB, noLoad bool) (n int32, err error) {
 
 	// Save running status
 	var sys db.System
-	if err = d.Model(&db.System{}).FirstOrCreate(&sys).Error; err != nil {
+	if err = db.FirstOrCreateSystem(d, &sys).Error; err != nil {
 		return 0, err
 	}
 	var gvs uint

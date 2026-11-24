@@ -169,6 +169,8 @@ type NodeLatency {
 	alive: Boolean!
 	message: String!
 	checkedAt: Time
+	# recentMs is chronological TCP probe samples (oldest → newest), up to 10.
+	recentMs: [Int!]!
 }
 enum Role {
 	ADMIN

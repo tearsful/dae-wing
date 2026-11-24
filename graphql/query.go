@@ -171,6 +171,7 @@ type NodeLatencyResolver struct {
 	Alive     bool
 	Message   string
 	CheckedAt *graphql.Time
+	RecentMs  []int32
 }
 
 func (r *queryResolver) NodeLatencies() ([]*NodeLatencyResolver, error) {
@@ -184,11 +185,16 @@ func (r *queryResolver) NodeLatencies() ([]*NodeLatencyResolver, error) {
 	snaps := cp.SnapshotNodeLatencies()
 	out := make([]*NodeLatencyResolver, 0, len(snaps))
 	for _, s := range snaps {
+		recent := s.RecentMs
+		if recent == nil {
+			recent = []int32{}
+		}
 		item := &NodeLatencyResolver{
 			Link:      s.Link,
 			LatencyMs: s.LatencyMs,
 			Alive:     s.Alive,
 			Message:   s.Message,
+			RecentMs:  recent,
 		}
 		if !s.CheckedAt.IsZero() {
 			item.CheckedAt = &graphql.Time{Time: s.CheckedAt}

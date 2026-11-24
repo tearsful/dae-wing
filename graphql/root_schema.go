@@ -43,6 +43,9 @@ type Query {
 	general: General! @hasRole(role: ADMIN)
 	# geoUpdateSchedule returns the cron used for built-in geosite/geoip auto-updates.
 	geoUpdateSchedule: GeoUpdateSchedule! @hasRole(role: ADMIN)
+	# nodeLatencies returns best-effort TCP probe latency snapshots keyed by node link.
+	# Only nodes currently loaded in running outbound groups are included.
+	nodeLatencies: [NodeLatency!]! @hasRole(role: ADMIN)
 }
 type Mutation {
 	# createUser creates a user if there is no user.
@@ -152,10 +155,20 @@ type Mutation {
 	# DAE_LOCATION_ASSET (/usr/local/share/daed), then reloads daed when running.
 	# Empty fileName updates all; concurrent calls are serialized.
 	updateGeofile(fileName: String): Int! @hasRole(role: ADMIN)
+
+	# triggerNodeLatencyChecks asks running dialers to refresh TCP latency samples (2s cooldown).
+	triggerNodeLatencyChecks: Int! @hasRole(role: ADMIN)
 }
 type GeoUpdateSchedule {
 	cron: String!
 	defaultCron: String!
+}
+type NodeLatency {
+	link: String!
+	latencyMs: Int
+	alive: Boolean!
+	message: String!
+	checkedAt: Time
 }
 enum Role {
 	ADMIN

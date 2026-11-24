@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/daeuniverse/dae-wing/dae"
 	"github.com/daeuniverse/dae-wing/db"
 	"github.com/daeuniverse/dae-wing/geoupdate"
 	"github.com/daeuniverse/dae-wing/graphql/internal"
@@ -537,5 +538,14 @@ func (r *MutationResolver) UpdateGeofile(args *struct {
 	if err := geoupdate.UpdateGeofile(name); err != nil {
 		return 0, err
 	}
+	return 1, nil
+}
+
+func (r *MutationResolver) TriggerNodeLatencyChecks() (int32, error) {
+	cp, err := dae.ControlPlane()
+	if err != nil {
+		return 0, err
+	}
+	cp.TriggerLatencyChecks()
 	return 1, nil
 }

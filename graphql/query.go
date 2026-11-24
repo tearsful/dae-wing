@@ -16,9 +16,9 @@ import (
 	"github.com/daeuniverse/dae-wing/common"
 	"github.com/daeuniverse/dae-wing/dae"
 	"github.com/daeuniverse/dae-wing/db"
+	"github.com/daeuniverse/dae-wing/geoupdate"
 	"github.com/daeuniverse/dae-wing/graphql/service/config"
 	"github.com/daeuniverse/dae-wing/graphql/service/dns"
-	"github.com/daeuniverse/dae-wing/geoupdate"
 	"github.com/daeuniverse/dae-wing/graphql/service/general"
 	"github.com/daeuniverse/dae-wing/graphql/service/group"
 	"github.com/daeuniverse/dae-wing/graphql/service/node"
@@ -163,6 +163,39 @@ func (r *queryResolver) GeoUpdateSchedule() (*GeoUpdateScheduleResolver, error) 
 		Cron:        expr,
 		DefaultCron: geoupdate.DefaultCron,
 	}, nil
+}
+
+type NodeLatencyResolver struct {
+	Link      string
+	LatencyMs *int32
+	Alive     bool
+	Message   string
+	CheckedAt *graphql.Time
+}
+
+func (r *queryResolver) NodeLatencies() ([]*NodeLatencyResolver, error) {
+	cp, err := dae.ControlPlane()
+	if err != nil {
+		if errors.Is(err, dae.ErrControlPlaneNotInit) {
+			return []*NodeLatencyResolver{}, nil
+		}
+		return nil, err
+	}
+	snaps := cp.SnapshotNodeLatencies()
+	out := make([]*NodeLatencyResolver, 0, len(snaps))
+	for _, s := range snaps {
+		item := &NodeLatencyResolver{
+			Link:      s.Link,
+			LatencyMs: s.LatencyMs,
+			Alive:     s.Alive,
+			Message:   s.Message,
+		}
+		if !s.CheckedAt.IsZero() {
+			item.CheckedAt = &graphql.Time{Time: s.CheckedAt}
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 func (r *queryResolver) Configs(args *struct {
 	ID       *graphql.ID
